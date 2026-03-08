@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # License: GPL v3 Copyright: 2016, Kovid Goyal <kovid at kovidgoyal.net>
+# Tab drag and focus tests: 2026, Anderson Firmino
 
 from functools import partial
 
@@ -7,10 +8,15 @@ from kitty.fast_data_types import (
     GLFW_MOD_ALT,
     GLFW_MOD_CONTROL,
     GLFW_MOUSE_BUTTON_LEFT,
+    GLFW_MOUSE_BUTTON_MIDDLE,
     GLFW_MOUSE_BUTTON_RIGHT,
+    GLFW_PRESS,
+    GLFW_RELEASE,
     create_mock_window,
+    get_tab_being_dragged,
     mock_mouse_selection,
     send_mock_mouse_event_to_window,
+    set_tab_being_dragged,
 )
 
 from . import BaseTest
@@ -313,3 +319,157 @@ class TestMouse(BaseTest):
         s.draw('12345')
         press(x=0, y=0)
         move(x=2, y=2, q='abcde\n\n12')
+
+
+class TestTabDragState(BaseTest):
+
+    def test_drag_state_default(self):
+        set_tab_being_dragged()
+        tab_id, drag_started, x, y = get_tab_being_dragged()
+        self.ae(tab_id, 0)
+        self.ae(drag_started, False)
+        self.ae(x, 0.0)
+        self.ae(y, 0.0)
+
+    def test_drag_state_set_and_get(self):
+        set_tab_being_dragged(42, False, 10.5, 20.3)
+        tab_id, drag_started, x, y = get_tab_being_dragged()
+        self.ae(tab_id, 42)
+        self.ae(drag_started, False)
+        self.assertAlmostEqual(x, 10.5, places=1)
+        self.assertAlmostEqual(y, 20.3, places=1)
+
+    def test_drag_state_started(self):
+        set_tab_being_dragged(42, True, 10.0, 20.0)
+        tab_id, drag_started, _, _ = get_tab_being_dragged()
+        self.ae(tab_id, 42)
+        self.ae(drag_started, True)
+
+    def test_drag_state_clear(self):
+        set_tab_being_dragged(42, True, 10.0, 20.0)
+        set_tab_being_dragged()
+        tab_id, drag_started, _, _ = get_tab_being_dragged()
+        self.ae(tab_id, 0)
+        self.ae(drag_started, False)
+
+    def test_drag_state_update_position(self):
+        set_tab_being_dragged(42, False, 10.0, 20.0)
+        set_tab_being_dragged(42, True, 50.0, 20.0)
+        tab_id, drag_started, x, y = get_tab_being_dragged()
+        self.ae(tab_id, 42)
+        self.ae(drag_started, True)
+        self.assertAlmostEqual(x, 50.0, places=1)
+        self.assertAlmostEqual(y, 20.0, places=1)
+
+    def test_drag_state_different_tab_ids(self):
+        for tab_id in (1, 100, 99999):
+            set_tab_being_dragged(tab_id, False, 0.0, 0.0)
+            got_id, _, _, _ = get_tab_being_dragged()
+            self.ae(got_id, tab_id)
+        set_tab_being_dragged()
+
+    def test_drag_state_persists_until_cleared(self):
+        set_tab_being_dragged(42, True, 10.0, 20.0)
+        for _ in range(5):
+            tab_id, drag_started, _, _ = get_tab_being_dragged()
+            self.ae(tab_id, 42)
+            self.ae(drag_started, True)
+        set_tab_being_dragged()
+        tab_id, _, _, _ = get_tab_being_dragged()
+        self.ae(tab_id, 0)
+
+
+class TestTabBarMouseHandling(BaseTest):
+
+    def test_drag_cleanup_on_release_without_drag_started(self):
+        set_tab_being_dragged(42, False, 10.0, 20.0)
+        tab_id, drag_started, _, _ = get_tab_being_dragged()
+        self.ae(tab_id, 42)
+        self.ae(drag_started, False)
+        set_tab_being_dragged()
+        tab_id, _, _, _ = get_tab_being_dragged()
+        self.ae(tab_id, 0)
+
+    def test_drag_cleanup_on_release_with_drag_started(self):
+        set_tab_being_dragged(42, True, 10.0, 20.0)
+        tab_id, drag_started, _, _ = get_tab_being_dragged()
+        self.ae(tab_id, 42)
+        self.ae(drag_started, True)
+        set_tab_being_dragged()
+        tab_id, _, _, _ = get_tab_being_dragged()
+        self.ae(tab_id, 0,
+                'set_tab_being_dragged() must clear state even when drag_started was True. '
+                'If this fails, mouse release after tab drag does not reset state, '
+                'causing all subsequent mouse events to route to tab bar instead of windows.')
+
+    def test_drag_threshold_state_transition(self):
+        import math
+        set_tab_being_dragged(42, False, 10.0, 20.0)
+        start_x, start_y = 10.0, 20.0
+        new_x, new_y = 50.0, 20.0
+        distance = math.sqrt((new_x - start_x)**2 + (new_y - start_y)**2)
+        self.assertGreater(distance, 5.0)
+        set_tab_being_dragged(42, True, start_x, start_y)
+        _, drag_started, _, _ = get_tab_being_dragged()
+        self.ae(drag_started, True)
+        set_tab_being_dragged()
+
+    def test_drag_below_threshold_stays_not_started(self):
+        import math
+        set_tab_being_dragged(42, False, 10.0, 20.0)
+        start_x, start_y = 10.0, 20.0
+        new_x, new_y = 11.0, 20.0
+        distance = math.sqrt((new_x - start_x)**2 + (new_y - start_y)**2)
+        self.assertLess(distance, 5.0)
+        _, drag_started, _, _ = get_tab_being_dragged()
+        self.ae(drag_started, False)
+        set_tab_being_dragged()
+
+    def test_middle_click_not_affected_by_drag_state(self):
+        set_tab_being_dragged(42, True, 10.0, 20.0)
+        tab_id, drag_started, _, _ = get_tab_being_dragged()
+        self.ae(tab_id, 42)
+        self.ae(drag_started, True)
+        set_tab_being_dragged()
+        tab_id, _, _, _ = get_tab_being_dragged()
+        self.ae(tab_id, 0)
+
+    def test_press_sets_drag_state(self):
+        set_tab_being_dragged()
+        fake_tab_id = 77
+        set_tab_being_dragged(fake_tab_id, False, 100.0, 200.0)
+        tab_id, drag_started, x, y = get_tab_being_dragged()
+        self.ae(tab_id, fake_tab_id)
+        self.ae(drag_started, False)
+        self.assertAlmostEqual(x, 100.0, places=1)
+        self.assertAlmostEqual(y, 200.0, places=1)
+        set_tab_being_dragged()
+
+    def test_sequential_press_release_cycles(self):
+        for cycle in range(3):
+            tab_id = 10 + cycle
+            set_tab_being_dragged(tab_id, False, float(cycle * 10), 0.0)
+            got_id, _, _, _ = get_tab_being_dragged()
+            self.ae(got_id, tab_id)
+            set_tab_being_dragged()
+            got_id, _, _, _ = get_tab_being_dragged()
+            self.ae(got_id, 0, f'Drag state leaked in cycle {cycle}')
+
+    def test_rapid_press_release_no_state_leak(self):
+        for i in range(100):
+            set_tab_being_dragged(i + 1, False, float(i), float(i))
+            set_tab_being_dragged()
+        tab_id, _, _, _ = get_tab_being_dragged()
+        self.ae(tab_id, 0, 'State leaked after rapid press/release cycles')
+
+    def test_drag_started_then_release_must_clear(self):
+        set_tab_being_dragged(42, False, 10.0, 20.0)
+        set_tab_being_dragged(42, True, 10.0, 20.0)
+        _, drag_started, _, _ = get_tab_being_dragged()
+        self.ae(drag_started, True)
+        set_tab_being_dragged()
+        tab_id, drag_started, _, _ = get_tab_being_dragged()
+        self.ae(tab_id, 0,
+                'REGRESSION: set_tab_being_dragged() must clear state unconditionally. '
+                'The indentation bug caused it to only clear when drag_started was False.')
+        self.ae(drag_started, False)
