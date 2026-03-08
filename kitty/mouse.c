@@ -841,9 +841,9 @@ HANDLER(handle_button_event) {
 
     if (osw->is_focused && window_idx != t->active_window && !is_release) {
         call_boss(switch_focus_to_in_active_tab, "K", t->windows[window_idx].id);
-        if (button == GLFW_MOUSE_BUTTON_LEFT) {
-            // Treat split-focus transfer clicks as focus-only and suppress
-            // the matching release to avoid release-without-press reports.
+        if (button == GLFW_MOUSE_BUTTON_LEFT && !OPT(focus_follows_mouse)) {
+            // Suppress the matching release to avoid release-without-press reports.
+            // Skip when focus_follows_mouse, as focus transfer is via motion events.
             osw->suppress_left_mouse_release = true;
             return;
         }
@@ -1262,6 +1262,7 @@ mouse_event(const int button, int modifiers, int action) {
     }
     MouseRegion r = mouse_region(true, true);
     w = r.window;
+    window_idx = r.window_idx;
     set_currently_hovered_window(w && !r.window_border && !r.in_title_bar ? w->id : 0, modifiers);
 
     if (r.in_tab_bar || global_state.tab_being_dragged.id) {
@@ -1270,6 +1271,12 @@ mouse_event(const int button, int modifiers, int action) {
         debug("handled by tab bar\n");
     } else if (r.in_title_bar && r.window) {
         mouse_cursor_shape = POINTER_POINTER;
+        if (OPT(focus_follows_mouse) && button < 0) {
+            Tab *t = osw->tabs + osw->active_tab;
+            if (window_idx != t->active_window) {
+                call_boss(switch_focus_to_in_active_tab, "K", t->windows[window_idx].id);
+            }
+        }
         handle_window_title_bar_mouse(r.window, button, modifiers, action);
         debug("handled by window title bar\n");
     } else if (r.window_border) {
