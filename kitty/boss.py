@@ -665,11 +665,15 @@ class Boss:
         startup_session = next(create_sessions(get_options(), special_window=sw, cwd_from=cwd_from))
         startup_session.session_name = ''
         ans = self.add_os_window(startup_session)
-        if cwd_from is not None and (sow := cwd_from.window) and (tm := self.os_window_map.get(ans)) and sow.created_in_session_name:
-            for tab in tm:
-                tab.created_in_session_name = sow.created_in_session_name
-                for w in tab:
-                    w.created_in_session_name = sow.created_in_session_name
+        if cwd_from is not None and (sow := cwd_from.window) and (tm := self.os_window_map.get(ans)):
+            session_name = sow.created_in_session_name
+            if not session_name and (sow_tab := sow.tabref()):
+                session_name = sow_tab.created_in_session_name
+            if session_name:
+                for tab in tm:
+                    tab.created_in_session_name = session_name
+                    for w in tab:
+                        w.created_in_session_name = session_name
         return ans
 
     @ac('win', 'New OS Window')
@@ -1228,7 +1232,8 @@ class Boss:
         window: Window | None = None,  # the window associated with the confirmation
         prompt: str = '> ',
         is_password: bool = False,
-        initial_value: str = ''
+        initial_value: str = '',
+        window_title: str = '',
     ) -> None:
         result: str = ''
 
@@ -1242,6 +1247,8 @@ class Boss:
         cmd = ['--type', 'password' if is_password else 'line', '--message', msg, '--prompt', prompt]
         if initial_value:
             cmd.append('--default=' + initial_value)
+        if window_title:
+            cmd.append(f'--title={window_title}')
         self.run_kitten_with_metadata(
             'ask', cmd, window=window, custom_callback=callback_, default_data={'response': ''}, action_on_removal=on_popup_overlay_removal
         )
@@ -1381,6 +1388,10 @@ class Boss:
             from .update_check import run_update_check
             run_update_check(get_options().update_check_interval * 60 * 60)
             self.update_check_started = True
+
+    def handle_window_title_bar_mouse(self, os_window_id: int, window_id: int, button: int, modifiers: int, action: int) -> None:
+        if tm := self.os_window_map.get(os_window_id):
+            tm.handle_window_title_bar_mouse(window_id, button, modifiers, action)
 
     def handle_tab_bar_mouse(self, os_window_id: int, x: float, y: float, button: int, modifiers: int, action: int) -> None:
         if tm := self.os_window_map.get(os_window_id):
@@ -2340,7 +2351,7 @@ class Boss:
                 prefilled = ''
             self.get_line(
                 _('Enter the new title for this tab below. An empty title will cause the default title to be used.'),
-                tab.set_title, window=tab.active_window, initial_value=prefilled)
+                tab.set_title, window=tab.active_window, initial_value=prefilled, window_title=_('Rename tab'))
 
     def create_special_window_for_show_error(self, title: str, msg: str, overlay_for: int | None = None) -> SpecialWindowInstance:
         ec = sys.exc_info()
@@ -2935,7 +2946,10 @@ class Boss:
         else:
             w = tab.new_window(cwd_from=cwd_from, location=location, allow_remote_control=allow_remote_control)
         if cwd_from is not None and (sw := cwd_from.window):
-            w.created_in_session_name = sw.created_in_session_name
+            session_name = sw.created_in_session_name
+            if not session_name and (sw_tab := sw.tabref()):
+                session_name = sw_tab.created_in_session_name
+            w.created_in_session_name = session_name
         return w
 
     @ac('win', 'Create a new window')
