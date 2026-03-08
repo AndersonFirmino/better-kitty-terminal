@@ -30,7 +30,7 @@ func ShowError(err error) {
 }
 
 func (self *Command) version_string(formatter *markup.Context) string {
-	return fmt.Sprintln(formatter.Italic(self.CommandStringForUsage()), formatter.Opt(kitty.VersionString), "created by", formatter.Title("Kovid Goyal"))
+	return fmt.Sprintln(formatter.Italic("Better Kitty Terminal"), formatter.Opt(kitty.VersionString), "created by", formatter.Title("Anderson Firmino"))
 }
 
 func (self *Command) ShowVersion() {
